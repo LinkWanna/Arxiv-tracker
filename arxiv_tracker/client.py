@@ -13,9 +13,9 @@ ARXIV_HTTP  = "http://export.arxiv.org/api/query"
 
 # 可通过环境变量调整（Windows PowerShell 示例见下）
 DEFAULT_TIMEOUT = float(os.getenv("ARXIV_TIMEOUT", "45"))      # 单次请求超时（秒）
-MAX_ATTEMPTS    = int(os.getenv("ARXIV_MAX_ATTEMPTS", "6"))    # 尝试次数
-BASE_PAUSE      = float(os.getenv("ARXIV_PAUSE", "1.5"))       # 基础退避（秒）
-MAX_SLEEP       = float(os.getenv("ARXIV_MAX_SLEEP", "20"))    # 退避上限（秒）
+MAX_ATTEMPTS    = int(os.getenv("ARXIV_MAX_ATTEMPTS", "8"))    # 尝试次数（增加到8次）
+BASE_PAUSE      = float(os.getenv("ARXIV_PAUSE", "3.0"))       # 基础退避（秒，遵循arXiv建议的3秒间隔）
+MAX_SLEEP       = float(os.getenv("ARXIV_MAX_SLEEP", "60"))    # 退避上限（秒，增加到60秒）
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -28,12 +28,19 @@ HEADERS = {
 _session = requests.Session()
 
 
-def _sleep_backoff(attempt: int) -> None:
+def _sleep_backoff(attempt: int, is_rate_limit: bool = False) -> None:
     """
     指数退避 + 抖动。第 1 次失败等待 ~BASE_PAUSE，
-    之后 2^n 递增，并加 0~0.5 随机抖动，封顶 MAX_SLEEP。
+    之后 2^n 递增，并加 0~1.0 随机抖动，封顶 MAX_SLEEP。
+    对于 429 错误，使用更长的退避时间。
     """
-    delay = min(BASE_PAUSE * (2 ** (attempt - 1)) + random.uniform(0, 0.5), MAX_SLEEP)
+    if is_rate_limit:
+        # 对于 429 错误，使用更激进的退避策略
+        delay = min(BASE_PAUSE * (2 ** attempt) + random.uniform(0, 2.0), MAX_SLEEP)
+        print(f"[Retry] Rate limited (429), waiting {delay:.1f}s before attempt {attempt + 1}...")
+    else:
+        delay = min(BASE_PAUSE * (2 ** (attempt - 1)) + random.uniform(0, 1.0), MAX_SLEEP)
+        print(f"[Retry] Waiting {delay:.1f}s before attempt {attempt + 1}...")
     time.sleep(delay)
 
 
@@ -64,7 +71,10 @@ def _do_get(base_url: str, params: Dict[str, str], timeout: Optional[float] = No
 
         # 还有机会就退避后继续
         if attempt < MAX_ATTEMPTS:
-            _sleep_backoff(attempt)
+            # 检查是否是 429 错误，使用更长的退避时间
+            is_rate_limit = isinstance(last_err, requests.exceptions.HTTPError) and \
+                           getattr(getattr(last_err, "response", None), "status_code", None) == 429
+            _sleep_backoff(attempt, is_rate_limit=is_rate_limit)
 
     # 全部失败
     if last_err:
@@ -87,6 +97,10 @@ def fetch_arxiv_feed(query: str,
         "sortBy": sort_by,
         "sortOrder": sort_order,
     }
+    
+    # 遵循 arXiv 的礼貌原则：请求前先等待 3 秒
+    # 这有助于避免触发 429 错误
+    time.sleep(BASE_PAUSE)
 
     last_err: Optional[Exception] = None
     for base in (ARXIV_HTTPS, ARXIV_HTTP):
