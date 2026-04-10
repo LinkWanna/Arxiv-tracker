@@ -1,9 +1,8 @@
-categories: ["cs.SE", "cs.OS", "cs.AI", "cs.DB"]
+categories: ["cs.SE", "cs.OS", "cs.AI"]
 keywords:
-  - "software engineering"
-  - "operating system"
-  - "artificial intelligence"
-  - "database"
+  - "Embedding"
+  - "Lean"
+  - "LLM"
 
 # exclude_keywords: # 选择排除的关键词
 #   - "Large Language Model"
